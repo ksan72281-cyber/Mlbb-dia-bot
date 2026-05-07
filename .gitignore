@@ -1,0 +1,8 @@
+.env
+orders.json
+prices.json
+banned.json
+__pycache__/
+*.pyc
+.DS_Store
+venv/
