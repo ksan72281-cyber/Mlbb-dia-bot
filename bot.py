@@ -4,12 +4,12 @@ import json
 import re
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
 )
 
-# HF Spaces uses environment variables directly (no .env file needed)
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-# Use /data/ directory for persistent storage on HF Spaces
 DATA_DIR = "/data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -143,7 +142,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = message.text.strip()
 
-    # ===== GROUP =====
     if is_group(update):
         parsed = parse_order(text)
         if not parsed:
@@ -176,7 +174,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                   reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # ===== PRIVATE =====
     if context.user_data.get("awaiting_screenshot"):
         oid = context.user_data.get("pending_order_id", "")
         await message.reply_text(f"📸 Order `{oid}` အတွက် screenshot (photo) ပို့ပေးပါ။", parse_mode="Markdown")
@@ -426,7 +423,14 @@ async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    request = HTTPXRequest(
+        connection_pool_size=8,
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
+        pool_timeout=30.0,
+    )
+    app = Application.builder().token(BOT_TOKEN).request(request).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", menu_cmd))
     app.add_handler(CommandHandler("orders", orders_list))
@@ -439,7 +443,7 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     logger.info("Bot started (Group + Private mode)...")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
