@@ -8,10 +8,8 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
 )
-from dotenv import load_dotenv
 
-load_dotenv()
-
+# HF Spaces uses environment variables directly (no .env file needed)
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -21,9 +19,13 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-ORDERS_FILE = "orders.json"
-PRICES_FILE = "prices.json"
-BANNED_FILE = "banned.json"
+# Use /data/ directory for persistent storage on HF Spaces
+DATA_DIR = "/data"
+os.makedirs(DATA_DIR, exist_ok=True)
+
+ORDERS_FILE = os.path.join(DATA_DIR, "orders.json")
+PRICES_FILE = os.path.join(DATA_DIR, "prices.json")
+BANNED_FILE = os.path.join(DATA_DIR, "banned.json")
 
 def load_json(file, default):
     try:
@@ -180,7 +182,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text(f"📸 Order `{oid}` အတွက် screenshot (photo) ပို့ပေးပါ။", parse_mode="Markdown")
         return
 
-    # Order ID ရိုက်ပို့ (group order ပြီးနောက်)
     oid_match = re.match(r"^(ORD\d+)$", text.upper())
     if oid_match:
         order_id = oid_match.group(1)
@@ -196,64 +197,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             elif o["status"] == "pending":
                 await message.reply_text(f"⏳ `{order_id}` — Admin confirm စောင့်နေသည်။", parse_mode="Markdown")
-            elif o["status"] == "completed":
-                await message.reply_text(f"✅ `{order_id}` — ပြီးစီးပြီဖြစ်သည်။", parse_mode="Markdown")
             else:
-                await message.reply_text(f"❌ `{order_id}` — Reject ဖြစ်သွားပြီ။", parse_mode="Markdown")
+                await message.reply_text(f"ℹ️ `{order_id}` — Status: {o['status']}", parse_mode="Markdown")
         else:
             await message.reply_text("⚠️ Order ID မတွေ့ပါ သို့မဟုတ် သင့် order မဟုတ်ပါ။")
         return
 
-    # Private တိုက်ရိုက် order
-    parsed = parse_order(text)
-    if parsed:
-        order_id = next_order_id()
-        orders = get_orders()
-        orders[order_id] = {
-            "order_id": order_id,
-            "user_id": user.id,
-            "username": user.username or user.first_name,
-            "mlbb_id": parsed["mlbb_id"],
-            "server_id": parsed["server_id"],
-            "package": parsed["package"],
-            "status": "pending_screenshot",
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "screenshot": None
-        }
-        save_json(ORDERS_FILE, orders)
-        context.user_data["awaiting_screenshot"] = True
-        context.user_data["pending_order_id"] = order_id
-        keyboard = [[InlineKeyboardButton("🗑️ Delete Order", callback_data=f"user_delete_{order_id}")]]
-        await message.reply_text(
-            f"✅ *Order လက်ခံပြီ!*\n\n🆔 `{order_id}`\n🎮 `{parsed['mlbb_id']}({parsed['server_id']})`\n💎 `{parsed['package']}`\n\n📸 Payment screenshot ပို့ပေးပါ။",
-            parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    else:
-        await message.reply_text(
-            "⚠️ Format မှားသည်။\nOrder: `123456(1234)dia878`\nGroup order ID: `ORD001`",
-            parse_mode="Markdown"
-        )
+    await message.reply_text(
+        "📦 Order တင်ရန် Group မှာ:\n`123456(1234)dia878`\nဟု ရိုက်ပါ။",
+        parse_mode="Markdown"
+    )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message = update.message
-    if user.id in get_banned() or is_group(update):
+
+    if user.id in get_banned():
+        return
+
+    if is_group(update):
         return
 
     if not context.user_data.get("awaiting_screenshot"):
-        await message.reply_text(
-            "⚠️ Order မတင်ရသေးပါ။\nGroup မှ order တင်ပြီးရင် Order ID (ဥပမာ `ORD001`) ပို့ပါ။",
-            parse_mode="Markdown"
-        )
+        await message.reply_text("⚠️ Order ID အရင်ပို့ပါ။ ဥပမာ: `ORD001`", parse_mode="Markdown")
         return
 
     order_id = context.user_data.get("pending_order_id")
-    if not order_id:
-        await message.reply_text("⚠️ Order ID မတွေ့ပါ။")
-        return
-
     orders = get_orders()
-    if order_id not in orders:
+
+    if not order_id or order_id not in orders:
         await message.reply_text("⚠️ Order မတွေ့ပါ။")
         return
 
@@ -261,14 +233,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     orders[order_id]["screenshot"] = file_id
     orders[order_id]["status"] = "pending"
     save_json(ORDERS_FILE, orders)
+
     context.user_data["awaiting_screenshot"] = False
     context.user_data["pending_order_id"] = None
 
     o = orders[order_id]
-    admin_keyboard = [[
-        InlineKeyboardButton("✅ Complete", callback_data=f"complete_{order_id}"),
-        InlineKeyboardButton("❌ Reject", callback_data=f"reject_{order_id}")
-    ], [InlineKeyboardButton("🗑️ Delete", callback_data=f"admin_delete_{order_id}")]]
+    admin_keyboard = [
+        [
+            InlineKeyboardButton("✅ Complete", callback_data=f"complete_{order_id}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"reject_{order_id}")
+        ],
+        [InlineKeyboardButton("🗑️ Delete", callback_data=f"admin_delete_{order_id}")]
+    ]
 
     await context.bot.send_photo(
         chat_id=ADMIN_ID, photo=file_id,
