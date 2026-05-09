@@ -1,12 +1,5 @@
 ---
-title: Mlbbidbot
-emoji: 💎
-colorFrom: blue
-colorTo: purple
+title: MLBB Bot
 sdk: docker
-pinned: false
+app_port: 7860
 ---
-
-# 💎 MLBB Diamond Top-up Bot
-
-MLBB Diamond Top-up Telegram Bot
