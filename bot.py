@@ -2,6 +2,8 @@ import logging
 import os
 import json
 import re
+import asyncio
+import threading
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.request import HTTPXRequest
@@ -9,6 +11,9 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
 )
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -26,6 +31,17 @@ os.makedirs(DATA_DIR, exist_ok=True)
 ORDERS_FILE = os.path.join(DATA_DIR, "orders.json")
 PRICES_FILE = os.path.join(DATA_DIR, "prices.json")
 BANNED_FILE = os.path.join(DATA_DIR, "banned.json")
+
+# FastAPI app for health check
+web_app = FastAPI()
+
+@web_app.get("/")
+async def root():
+    return JSONResponse({"status": "ok", "bot": "MLBB Diamond Bot running"})
+
+@web_app.get("/health")
+async def health():
+    return JSONResponse({"status": "healthy"})
 
 def load_json(file, default):
     try:
@@ -421,7 +437,7 @@ async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-def main():
+async def run_bot():
     request = HTTPXRequest(
         connection_pool_size=8,
         connect_timeout=60.0,
@@ -441,18 +457,24 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    logger.info("Bot started...")
+    logger.info("Bot started with polling...")
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(drop_pending_updates=True)
+    logger.info("Bot is running...")
+    # Keep running forever
+    while True:
+        await asyncio.sleep(3600)
 
-    if WEBHOOK_URL:
-        logger.info(f"Running with webhook: {WEBHOOK_URL}")
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=7860,
-            webhook_url=WEBHOOK_URL,
-        )
-    else:
-        logger.info("Running with polling...")
-        app.run_polling(drop_pending_updates=True)
+def start_bot_thread():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(run_bot())
 
 if __name__ == "__main__":
-    main()
+    # Start bot in background thread
+    bot_thread = threading.Thread(target=start_bot_thread, daemon=True)
+    bot_thread.start()
+    logger.info("Bot thread started!")
+    # Start FastAPI web server for HF health check
+    uvicorn.run(web_app, host="0.0.0.0", port=7860)
